@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,8 +10,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 	"sync"
+	"text/template"
+	"time"
 )
 
 var g = new(GithubContribution)
@@ -32,9 +34,36 @@ type PRContent struct {
 	Title             string    `json:"title"`
 	CreatedAt         time.Time `json:"created_at"`
 	AuthorAssociation string    `json:"author_association"`
-	User struct {
+	User              struct {
 		Username string `json:"login"`
 	} `json:"user"`
+}
+
+func parseMarkdown(data map[string]interface{}) ([]byte, error) {
+	tmpl := `# 开源项目贡献统计
+
+## Contributions({{.count}} merged)
+
+
+{{ range .prs }}
+* [**{{.repo_name}}**(★{{.repo_star}})]({{.repo_link}})
+  {{ range .pr }}
+  * [{{.pr_name}}]({{.pr_link}})
+  {{ end }}
+{{ end }}
+
+`
+	parsedTmpl, err := template.New("tmpl").Parse(tmpl)
+	if err != nil {
+		return nil, err
+	}
+
+	var result bytes.Buffer
+	if err := parsedTmpl.Execute(&result, data); err != nil {
+		return nil, err
+	}
+
+	return result.Bytes(), nil
 }
 
 func init() {
