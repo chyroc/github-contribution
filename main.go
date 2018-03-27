@@ -8,10 +8,10 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"text/template"
 	"time"
 )
 
@@ -39,31 +39,30 @@ type PRContent struct {
 	} `json:"user"`
 }
 
-func parseMarkdown(data map[string]interface{}) ([]byte, error) {
-	tmpl := `# 开源项目贡献统计
+type PRGroupBy struct {
+	RepoName string       `json:"repo_name"`
+	RepoStar int          `json:"repo_star"`
+	RepoURL  string       `json:"repo_url"`
+	PR       []*PRContent `json:"pr"`
+}
 
-## Contributions({{.count}} merged)
+type PRContents struct {
+	prs []*PRContent
+}
 
+func (p PRContents) Len() int {
+	return len(p.prs)
+}
 
-{{ range .prs }}
-* [**{{.repo_name}}**(★{{.repo_star}})]({{.repo_link}})
-  {{ range .pr }}
-  * [{{.pr_name}}]({{.pr_link}})
-  {{ end }}
-{{ end }}
-
-`
-	parsedTmpl, err := template.New("tmpl").Parse(tmpl)
-	if err != nil {
-		return nil, err
+func (p PRContents) Less(i, j int) bool {
+	if t := strings.Compare(p.prs[i].RepoURL, p.prs[j].RepoURL); t != 0 {
+		return t > 0
 	}
+	return p.prs[i].CreatedAt.Sub(p.prs[j].CreatedAt) > 0
+}
 
-	var result bytes.Buffer
-	if err := parsedTmpl.Execute(&result, data); err != nil {
-		return nil, err
-	}
-
-	return result.Bytes(), nil
+func (p PRContents) Swap(i, j int) {
+	p.prs[i], p.prs[j] = p.prs[j], p.prs[i]
 }
 
 func init() {
@@ -175,7 +174,11 @@ func (g *GithubContribution) FetchPRCount(page, perPage int) (int, error) {
 	return r.TotalCount, nil
 }
 
-func (g *GithubContribution) FetchPRs() ([]*PRContent, error) {
+func (g *GithubContribution) FetchRepoInfo(page, perPage int) (int, error) {
+	return 0, fmt.Errorf("err")
+}
+
+func (g *GithubContribution) FetchAllPRs() ([]*PRContent, error) {
 	count, err := g.FetchPRCount(1, 1)
 	if err != nil {
 		return nil, err
@@ -216,20 +219,46 @@ func (g *GithubContribution) FetchPRs() ([]*PRContent, error) {
 	return prs, nil
 }
 
-func main() {
-	// get username
-	name, err := g.GetSelfUsername()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("github name %s\n", name)
+func (g *GithubContribution) ParsePRContents(prs []*PRContent) ([]byte, error) {
+	pp := PRContents{prs}
+	sort.Sort(pp)
 
-	// get prs
-	prs, err := g.FetchPRs()
+	var exist = make(map[string]bool)
+	var buf bytes.Buffer
+	buf.Write([]byte("# 开源项目贡献统计\n\n"))
+	buf.Write([]byte(fmt.Sprintf("## Contributions(%d merged)\n\n\n", len(prs))))
+
+	for _, v := range pp.prs {
+		fmt.Printf("%s\n", v.URL)
+		if !exist[v.RepoURL] {
+			exist[v.RepoURL] = true
+			buf.Write([]byte(fmt.Sprintf("* [**%s**(★%d)](%s)\n", strings.TrimPrefix(v.RepoURL, "https://github.com/"), 10, v.RepoURL)))
+		}
+
+		buf.Write([]byte(fmt.Sprintf("  * [%s](%s)\n", v.Title, v.URL)))
+	}
+
+	return buf.Bytes(), nil
+}
+
+func (g *GithubContribution) Run() error {
+	prs, err := g.FetchAllPRs()
+	if err != nil {
+		return err
+	}
+
+	body, err := g.ParsePRContents(prs)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%s", body)
+	return nil
+}
+
+func main() {
+	err := g.Run()
 	if err != nil {
 		panic(err)
-	}
-	for k, v := range prs {
-		fmt.Printf("%d pr %s\n", k, v)
 	}
 }
