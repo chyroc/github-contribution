@@ -17,6 +17,7 @@ import (
 
 var g = new(GithubContribution)
 var perCount = 100
+var debug = false
 
 type GithubContribution struct {
 	token    string
@@ -29,8 +30,12 @@ type PR struct {
 }
 
 type PRContent struct {
+	RepoURL           string    `json:"-"`
+	RepoName          string    `json:"-"`
+	BelongSelf        bool      `json:"-"`
+	RepoStarCount     int       `json:"-"`
 	URL               string    `json:"html_url"`
-	RepoURL           string    `json:"repository_url"`
+	RepoAPIURL        string    `json:"repository_url"`
 	Title             string    `json:"title"`
 	CreatedAt         time.Time `json:"created_at"`
 	AuthorAssociation string    `json:"author_association"`
@@ -55,7 +60,7 @@ func (p PRContents) Len() int {
 }
 
 func (p PRContents) Less(i, j int) bool {
-	if t := strings.Compare(p.prs[i].RepoURL, p.prs[j].RepoURL); t != 0 {
+	if t := strings.Compare(p.prs[i].RepoName, p.prs[j].RepoName); t != 0 {
 		return t > 0
 	}
 	return p.prs[i].CreatedAt.Sub(p.prs[j].CreatedAt) > 0
@@ -65,8 +70,15 @@ func (p PRContents) Swap(i, j int) {
 	p.prs[i], p.prs[j] = p.prs[j], p.prs[i]
 }
 
+func printVerbose(format string, a ...interface{}) {
+	if debug {
+		fmt.Printf(format, a...)
+	}
+}
+
 func init() {
 	flag.StringVar(&g.token, "t", "", "token of github")
+	flag.BoolVar(&debug, "v", false, "verbose")
 	flag.Parse()
 }
 
@@ -113,8 +125,8 @@ func (g *GithubContribution) GetSelfUsername() (string, error) {
 		return "", err
 	}
 
+	printVerbose("Login to GitHub as [%s] ...\n\n", r.Login)
 	g.username = r.Login
-
 	return r.Login, nil
 }
 
@@ -144,6 +156,12 @@ func (g *GithubContribution) FetchPR(page, perPage int) (*PR, error) {
 		return nil, err
 	}
 
+	for _, v := range r.PRs {
+		v.RepoName = strings.TrimPrefix(v.RepoAPIURL, "https://api.github.com/repos/")
+		v.RepoURL = strings.Replace(v.RepoAPIURL, "https://api.github.com/repos/", "https://github.com/", -1)
+		v.BelongSelf = strings.Contains(v.RepoAPIURL, "https://api.github.com/repos/"+g.username+"/")
+	}
+
 	return r, nil
 }
 
@@ -155,12 +173,9 @@ func (g *GithubContribution) FetchPRContent(page, perPage int) ([]*PRContent, er
 
 	var prs []*PRContent
 	for _, v := range r.PRs {
-		if strings.Contains(v.RepoURL, "https://api.github.com/repos/"+g.username+"/") {
-			continue
+		if !v.BelongSelf {
+			prs = append(prs, v)
 		}
-
-		v.RepoURL = strings.Replace(v.RepoURL, "https://api.github.com/repos/", "https://github.com/", -1)
-		prs = append(prs, v)
 	}
 	return prs, nil
 }
@@ -174,8 +189,22 @@ func (g *GithubContribution) FetchPRCount(page, perPage int) (int, error) {
 	return r.TotalCount, nil
 }
 
-func (g *GithubContribution) FetchRepoInfo(page, perPage int) (int, error) {
-	return 0, fmt.Errorf("err")
+func (g *GithubContribution) GetRepoStar(p *PRContent) (int, error) {
+	printVerbose("get repo(%s) star count\n", p.RepoName)
+	body, err := g.RequestGithubApi("GET", "repos/"+p.RepoName, nil, nil)
+	if err != nil {
+		return -1, err
+	}
+
+	var r struct {
+		StarCount int `json:"stargazers_count"`
+	}
+	err = json.Unmarshal(body, &r)
+	if err != nil {
+		return -1, err
+	}
+
+	return r.StarCount, nil
 }
 
 func (g *GithubContribution) FetchAllPRs() ([]*PRContent, error) {
@@ -190,7 +219,9 @@ func (g *GithubContribution) FetchAllPRs() ([]*PRContent, error) {
 	for page := 1; page*perCount < count; page++ {
 		sw.Add(1)
 		go func(page int) {
-			fmt.Printf("start goroutine %d\n", page)
+			defer sw.Done()
+
+			printVerbose("start goroutine %d\n", page)
 			prs, err := g.FetchPRContent(page, perCount)
 			if err != nil {
 				panic(err)
@@ -199,21 +230,41 @@ func (g *GithubContribution) FetchAllPRs() ([]*PRContent, error) {
 			for _, v := range prs {
 				prChan <- v
 			}
-
-			sw.Done()
 		}(page)
 
 	}
 	sw.Wait()
 
 	var prs []*PRContent
+	var repoStarMap = make(map[string]int)
+	var sw2 sync.WaitGroup
+
 	for {
 		select {
 		case v := <-prChan:
+			if _, ok := repoStarMap[v.RepoName]; !ok {
+				// get star
+				sw2.Add(1)
+				go func() {
+					defer sw2.Done()
+					starCount, err := g.GetRepoStar(v)
+					if err != nil {
+						panic(err)
+					}
+					repoStarMap[v.RepoName] = starCount
+				}()
+			}
 			prs = append(prs, v)
 		default:
-			return prs, nil
+			goto Re
 		}
+	}
+
+Re:
+	sw2.Wait()
+
+	for _, v := range prs {
+		v.RepoStarCount = repoStarMap[v.RepoName]
 	}
 
 	return prs, nil
@@ -229,10 +280,9 @@ func (g *GithubContribution) ParsePRContents(prs []*PRContent) ([]byte, error) {
 	buf.Write([]byte(fmt.Sprintf("## Contributions(%d merged)\n\n\n", len(prs))))
 
 	for _, v := range pp.prs {
-		fmt.Printf("%s\n", v.URL)
-		if !exist[v.RepoURL] {
-			exist[v.RepoURL] = true
-			buf.Write([]byte(fmt.Sprintf("* [**%s**(★%d)](%s)\n", strings.TrimPrefix(v.RepoURL, "https://github.com/"), 10, v.RepoURL)))
+		if !exist[v.RepoName] {
+			exist[v.RepoName] = true
+			buf.Write([]byte(fmt.Sprintf("* [**%s**(★%d)](%s)\n", v.RepoName, v.RepoStarCount, v.RepoURL)))
 		}
 
 		buf.Write([]byte(fmt.Sprintf("  * [%s](%s)\n", v.Title, v.URL)))
@@ -252,8 +302,7 @@ func (g *GithubContribution) Run() error {
 		return err
 	}
 
-	fmt.Printf("%s", body)
-	return nil
+	return ioutil.WriteFile("README.md", body, 0644)
 }
 
 func main() {
