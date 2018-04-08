@@ -11,7 +11,15 @@ import (
 func init() {
 	flag.StringVar(&internal.DefaultGithub.Token, "t", "", "token of github")
 	flag.BoolVar(&internal.Debug, "v", false, "verbose")
+	config := flag.String("c", "", "config path")
 	flag.Parse()
+
+	if *config != "" {
+		err := internal.LoadConfig(*config)
+		if err != nil {
+			panic(err)
+		}
+	}
 }
 
 func main() {
@@ -27,8 +35,15 @@ list: 开源贡献 / 个人项目
 	}
 	buf.Write(b)
 
+	b, err = internal.DefaultSideProject.Run()
+	if err != nil {
+		panic(err)
+	}
+	buf.Write(b)
+
 	err = ioutil.WriteFile("README.md", buf.Bytes(), 0644)
 	if err != nil {
 		panic(err)
 	}
+
 }
