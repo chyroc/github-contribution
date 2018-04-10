@@ -26,6 +26,7 @@ func main() {
 	var buf bytes.Buffer
 	buf.Write([]byte(`# contribute
 list: 开源贡献 / 个人项目
+> 使用工具github-contribution制作(https://github.com/Chyroc/github-contribution)
 
 `))
 
