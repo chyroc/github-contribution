@@ -16,6 +16,9 @@ type config struct {
 		Introduction string `json:"introduction"`
 		URL          string `json:"url"`
 	} `json:"side_project"`
+	GithubProject struct {
+		Ignore []string `json:"ignore"`
+	} `json:"github_project"`
 }
 
 func LoadConfig(path string) error {

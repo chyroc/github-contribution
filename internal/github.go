@@ -269,9 +269,34 @@ func (g *GithubContribution) ParsePRContents(prs []*PRContent) ([]byte, error) {
 
 	var exist = make(map[string]bool)
 	var buf bytes.Buffer
-	buf.Write([]byte(fmt.Sprintf(`## 开源项目贡献统计(%d merged)`, len(prs)) + "\n\n"))
+
+	count := len(prs)
+	for _, v := range pp.prs {
+		ignored := false
+		for _, ignore := range Config.GithubProject.Ignore {
+			if strings.Contains(v.RepoName, ignore) {
+				ignored = true
+				break
+			}
+		}
+		if ignored {
+			count--
+		}
+	}
+	buf.Write([]byte(fmt.Sprintf(`## 开源项目贡献统计(%d merged)`, count) + "\n\n"))
 
 	for _, v := range pp.prs {
+		ignored := false
+		for _, ignore := range Config.GithubProject.Ignore {
+			if v.RepoName == ignore {
+				ignored = true
+				break
+			}
+		}
+		if ignored {
+			continue
+		}
+
 		if !exist[v.RepoName] {
 			exist[v.RepoName] = true
 			buf.Write([]byte(fmt.Sprintf("* [**%s**(★%d)](%s)\n", v.RepoName, v.RepoStarCount, v.RepoURL)))
