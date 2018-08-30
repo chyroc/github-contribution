@@ -38,7 +38,7 @@ type PRContent struct {
 	Title             string    `json:"title"`
 	CreatedAt         time.Time `json:"created_at"`
 	AuthorAssociation string    `json:"author_association"`
-	User struct {
+	User              struct {
 		Username string `json:"login"`
 	} `json:"user"`
 }
@@ -270,22 +270,24 @@ func (g *GithubContribution) ParsePRContents(prs []*PRContent) ([]byte, error) {
 	var exist = make(map[string]bool)
 	var buf bytes.Buffer
 
-	count := len(prs)
+	var newPrs []*PRContent
 	for _, v := range pp.prs {
 		ignored := false
 		for _, ignore := range Config.GithubProject.Ignore {
-			if strings.Contains(v.RepoName, ignore) {
+			if strings.Contains(strings.ToLower(v.RepoName), ignore) || strings.Contains(strings.ToLower(v.Title), ignore) {
 				ignored = true
 				break
 			}
 		}
 		if ignored {
-			count--
+			continue
 		}
-	}
-	buf.Write([]byte(fmt.Sprintf(`## 开源项目贡献统计(%d merged)`, count) + "\n\n"))
 
-	for _, v := range pp.prs {
+		newPrs = append(newPrs, v)
+	}
+	buf.Write([]byte(fmt.Sprintf(`## 开源项目贡献统计(%d merged)`, len(newPrs)) + "\n\n"))
+
+	for _, v := range newPrs {
 		ignored := false
 		for _, ignore := range Config.GithubProject.Ignore {
 			if v.RepoName == ignore {
